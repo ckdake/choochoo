@@ -106,24 +106,39 @@ def backup_schema(config):
                           f'(like {src} including constraints including indexes including defaults)')
             log.info(f'Copying {src} to {dst}')
             execute(cnxn, f'insert into {dst} (select * from {src})')
-        for row1 in execute(cnxn, 'select table_name from information_schema.tables WHERE table_schema = :schema',
+        # for row1 in execute(cnxn, 'select table_name from information_schema.tables WHERE table_schema = :schema',
+        #                     schema=user).fetchall():
+        #     table = row1[0]
+        #     src = f'{q_user}.{quote(cnxn, table)}'
+        #     dst = f'{q_previous}.{quote(cnxn, table)}'
+        #     log.info(f'Setting foreign key constraints on {dst}')
+        #     for row2 in execute(cnxn, f'select pg_get_constraintdef(oid), conname from pg_constraint '
+        #                               f'where contype=\'f\' and conrelid = \'{src}\'::regclass'):
+        #         key, name = row2[0], row2[1]
+        #         key = key.replace(user, previous)
+        #         stmt = f'alter table {dst} add constraint {name} {key}'
+        #         log.debug(key)
+        #         execute(cnxn, stmt)
+
+
+def truncate_tables(config):
+    user = config.args[USER]
+    cnxn = get_cnxn(config)
+    q_user = quote(cnxn, user)
+    with with_log(f'Truncating tables in {user}'):
+        for row1 in execute(cnxn, "select table_name from information_schema.tables "
+                                  "where table_schema = :schema and table_type = 'BASE TABLE'",
                             schema=user).fetchall():
             table = row1[0]
             src = f'{q_user}.{quote(cnxn, table)}'
-            dst = f'{q_previous}.{quote(cnxn, table)}'
-            log.info(f'Setting foreign key constraints on {dst}')
-            for row2 in execute(cnxn, f'select pg_get_constraintdef(oid), conname from pg_constraint '
-                                      f'where contype=\'f\' and conrelid = \'{src}\'::regclass'):
-                key, name = row2[0], row2[1]
-                key = key.replace(user, previous)
-                stmt = f'alter table {dst} add constraint {name} {key}'
-                log.debug(key)
-                execute(cnxn, stmt)
+            log.info(f'Truncating {src}')
+            execute(cnxn, f'truncate table {src} cascade')
 
 
 def remove_schema(config, previous=True):
     if previous and config.args[PREVIOUS]:
         backup_schema(config)
+    truncate_tables(config)
     remove(get_cnxn(config), 'schema', config.args[USER], ' cascade')
 
 

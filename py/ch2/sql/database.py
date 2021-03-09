@@ -19,12 +19,12 @@ ActivityGroup, ActivityJournal, ActivityTimespan, ActivityBookmark
 DiaryTopic, DiaryTopicJournal, DiaryTopicField,
 ActivityTopic, ActivityTopicJournal, ActivityTopicField,
 StatisticName, StatisticJournal, StatisticJournalInteger, StatisticJournalFloat, StatisticJournalText, StatisticMeasure
-Segment, SegmentJournal
 Pipeline
 MonitorJournal
 Constant, SystemConstant, Process
 ActivitySimilarity, ActivityNearby
 Timestamp, Process, SystemConstant
+SectorGroup, Sector, SectorClimb
 
 
 log = getLogger(__name__)
@@ -48,7 +48,7 @@ class DirtySession(Session):
         if self.__dirty_ids:
             log.debug(f'Marking {len(self.__dirty_ids)} intervals dirty')
             for ids in grouper(self.__dirty_ids, 900):
-                self.query(Interval).filter(Interval.id.in_(ids)). \
+                self.query(Interval).filter(Interval.id.in_(ids), Interval.dirty == False). \
                     update({Interval.dirty: True}, synchronize_session=False)
             super().commit()
             self.__dirty_ids = set()

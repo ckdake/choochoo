@@ -3,6 +3,7 @@ import datetime as dt
 from enum import IntEnum
 from logging import getLogger
 
+from geoalchemy2 import Geography
 from sqlalchemy import Column, Integer, ForeignKey, Text, UniqueConstraint, Float, desc, asc, Index, DateTime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import relationship, backref
@@ -12,7 +13,7 @@ from .source import Interval
 from ..support import Base
 from ..triggers import add_child_ddl, add_text
 from ..types import ShortCls, Name, name_and_title, Point, UTC
-from ..utils import add
+from ..utils import add, WGS84_SRID
 from ...common.date import format_seconds, local_date_to_time, time_to_local_time
 from ...diary.model import TYPE, MEASURES, SCHEDULES
 from ...lib.utils import sigfig
@@ -137,7 +138,6 @@ class StatisticJournalType(IntEnum):
     FLOAT = 2
     TEXT = 3
     TIMESTAMP = 4
-    POINT = 5
 
 
 class StatisticJournal(Base):
@@ -231,10 +231,12 @@ class StatisticJournal(Base):
     def measures_as_model(self, date):
         if hasattr(self, 'measures'):
             measures = {TYPE: MEASURES, SCHEDULES: {}}
+            # order by day, month, year etc
             for measure in sorted(self.measures,
                                   key=lambda measure: measure.source.schedule.frame_length_in_days(date),
                                   reverse=True):
-                measures[SCHEDULES][measure.source.schedule.describe(compact=True)] = (measure.percentile, measure.rank)
+                measures[SCHEDULES][measure.source.schedule.describe(compact=True)] = \
+                    (measure.percentile, measure.rank)
             return measures
         else:
             return None
@@ -445,31 +447,6 @@ class StatisticJournalTimestamp(StatisticJournal):
         return time_to_local_time(self.value)
 
 
-@add_child_ddl(StatisticJournal)
-@add_text('''
-create index idx_%(table)s_value on %(table)s using gist (value);
-''')
-class StatisticJournalPoint(StatisticJournal):
-
-    __tablename__ = 'statistic_journal_point'
-
-    id = Column(Integer, ForeignKey('statistic_journal.id', ondelete='cascade'), primary_key=True)
-    # value = Column(Geography('point', srid=4326), nullable=False)
-    value = Column(Point, nullable=False)
-
-    __mapper_args__ = {
-        'polymorphic_identity': StatisticJournalType.POINT
-    }
-
-    @classmethod
-    def add(cls, s, name, units, summary, owner, source, value, time, serial=None, description=None):
-        return super().add(s, name, units, summary, owner, source, value, time, serial,
-                           StatisticJournalType.POINT, description=description)
-
-    def formatted(self):
-        return time_to_local_time(self.value)
-
-
 class StatisticMeasure(Base):
 
     __tablename__ = 'statistic_measure'
@@ -493,22 +470,19 @@ STATISTIC_JOURNAL_CLASSES = {
     StatisticJournalType.INTEGER: StatisticJournalInteger,
     StatisticJournalType.FLOAT: StatisticJournalFloat,
     StatisticJournalType.TEXT: StatisticJournalText,
-    StatisticJournalType.TIMESTAMP: StatisticJournalTimestamp,
-    StatisticJournalType.POINT: StatisticJournalPoint
+    StatisticJournalType.TIMESTAMP: StatisticJournalTimestamp
 }
 
 STATISTIC_JOURNAL_TYPES = {
     StatisticJournalInteger: StatisticJournalType.INTEGER,
     StatisticJournalFloat: StatisticJournalType.FLOAT,
     StatisticJournalText: StatisticJournalType.TEXT,
-    StatisticJournalTimestamp: StatisticJournalType.TIMESTAMP,
-    StatisticJournalPoint: StatisticJournalType.POINT
+    StatisticJournalTimestamp: StatisticJournalType.TIMESTAMP
 }
 
 TYPE_TO_JOURNAL_CLASS = {
     int: StatisticJournalInteger,
     float: StatisticJournalFloat,
     str: StatisticJournalText,
-    dt.datetime: StatisticJournalTimestamp,
-    tuple: StatisticJournalPoint
+    dt.datetime: StatisticJournalTimestamp
 }

@@ -7,16 +7,19 @@ from werkzeug.routing import Map, Rule
 from werkzeug.wrappers.json import JSONMixin
 
 from .json import JsonResponse
+from .middleware import CsrfCheck
 from .servlets.analysis import Analysis
 from .servlets.configure import Configure
 from .servlets.diary import Diary
 from .servlets.jupyter import Jupyter
 from .servlets.kit import Kit
+from .servlets.route import Route
 from .servlets.search import Search
-from .servlets.thumbnail import Thumbnail
+from .servlets.image import Thumbnail, Sparkline
+from .servlets.sector import Sector
 from .servlets.upload import Upload
 from .static import Static
-from ..commands.args import LOG, WEB, SERVICE, VERBOSITY, BIND, PORT, WARN, SECURE, THUMBNAIL_DIR, \
+from ..commands.args import LOG, WEB, SERVICE, VERBOSITY, BIND, PORT, WARN, SECURE, IMAGE_DIR, \
     NOTEBOOK_DIR, JUPYTER
 from ..common.args import mm
 from ..common.names import BASE
@@ -48,7 +51,7 @@ class WebController(BaseController):
         self.__warn_data = args[WARN + '-' + DATA]
         self.__warn_secure = args[WARN + '-' + SECURE]
         self.__notebook_dir = args[NOTEBOOK_DIR]
-        self.__thumbnail_dir = args[THUMBNAIL_DIR]
+        self.__thumbnail_dir = args[IMAGE_DIR]
         self.__jupyter = args[JUPYTER]
 
     def _build_cmd_and_log(self, ch2):
@@ -56,17 +59,15 @@ class WebController(BaseController):
         cmd = f'{ch2} {mm(VERBOSITY)} 0 {mm(LOG)} {log_name} {mm(BASE)} {self._config.args[BASE]} ' \
               f'{WEB} {SERVICE} {mm(WEB + "-" + BIND)} {self._bind} {mm(WEB + "-" + PORT)} {self._port} ' \
               f'{mm(JUPYTER)} {self.__jupyter} ' \
-              f'{mm(THUMBNAIL_DIR)} {self.__thumbnail_dir} {mm(NOTEBOOK_DIR)} {self.__notebook_dir}'
+              f'{mm(IMAGE_DIR)} {self.__thumbnail_dir} {mm(NOTEBOOK_DIR)} {self.__notebook_dir}'
         if self.__warn_data: cmd += f' {mm(WARN + "-" + DATA)}'
         if self.__warn_secure: cmd += f' {mm(WARN + "-" + SECURE)}'
         return cmd, log_name
 
     def _run(self):
-        # todo - repeat this elsewhere if database not present
-        # self._config.set_constant(SystemConstant.WEB_URL, 'http://%s:%d' % (self._bind, self._port), force=True)
         log.debug(f'Binding to {self._bind}:{self._port}')
         run_simple(self._bind, self._port,
-                   WebServer(self._config, warn_data=self.__warn_data, warn_secure=self.__warn_secure),
+                   CsrfCheck(WebServer(self._config, warn_data=self.__warn_data, warn_secure=self.__warn_secure)),
                    use_debugger=self._dev, use_reloader=self._dev)
 
     def _cleanup(self):
@@ -98,11 +99,14 @@ class WebServer:
         analysis = Analysis()
         configure = Configure(config)
         diary = Diary()
-        jupyter = Jupyter(config, self.__config.args[JUPYTER])
+        jupyter = Jupyter(config)
         kit = Kit()
+        route = Route()
+        sector = Sector(config)
         static = Static('.static')
         upload = Upload(config)
         thumbnail = Thumbnail(config)
+        sparkline = Sparkline(config)
         search = Search()
 
         self.url_map = Map([
@@ -139,7 +143,22 @@ class WebServer:
             Rule('/api/kit/statistics', endpoint=self.check(kit.read_statistics, empty=False), methods=(GET,)),
             Rule('/api/kit/<date>', endpoint=self.check(kit.read_snapshot, empty=False), methods=(GET,)),
 
-            Rule('/api/thumbnail/<activity>', endpoint=thumbnail, methods=(GET,)),
+            Rule('/api/thumbnail/<int:activity>', endpoint=thumbnail, methods=(GET,)),
+            Rule('/api/thumbnail/<int:activity>/<int:sector>', endpoint=thumbnail, methods=(GET,)),
+
+            Rule('/api/route/latlon/activity/<int:activity>', endpoint=self.check(route.read_activity_latlon, empty=False), methods=(GET,)),
+            Rule('/api/route/latlon/sector/<int:sector>', endpoint=self.check(route.read_sector_latlon, empty=False), methods=(GET,)),
+
+            Rule('/api/sector', endpoint=self.check(sector.create_sector, empty=False), methods=(POST,)),
+            Rule('/api/sector/<int:sector>', endpoint=self.check(sector.read_sector_journals, empty=False), methods=(GET,)),
+
+            Rule('/api/sparkline/<int:statistic>', endpoint=sparkline, methods=(GET,)),
+            Rule('/api/sparkline/<int:statistic>/<int:sector>', endpoint=sparkline, methods=(GET,)),
+            Rule('/api/sparkline/<int:statistic>/<int:sector>/<int:activity>', endpoint=sparkline, methods=(GET,)),
+            Rule('/api/isparkline/<int:statistic>', endpoint=sparkline, methods=(GET,), defaults={'invert': True}),
+            Rule('/api/isparkline/<int:statistic>/<int:sector>', endpoint=sparkline, methods=(GET,), defaults={'invert': True}),
+            Rule('/api/isparkline/<int:statistic>/<int:sector>/<int:activity>', endpoint=sparkline, methods=(GET,), defaults={'invert': True}),
+
             Rule('/api/static/<path:path>', endpoint=static, methods=(GET,)),
 
             Rule('/api/upload', endpoint=self.check(upload, empty=False), methods=(PUT,)),

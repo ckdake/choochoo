@@ -12,7 +12,6 @@ from ..common.names import BASE, UNDEF
 from ..common.names import VERBOSITY, URI
 from ..lib.utils import timing
 from ..lib.workers import command_root
-from ..names import any_to_fmt
 from ..sql import Pipeline, Interval, PipelineType, StatisticJournal, StatisticName
 from ..sql.types import short_cls
 
@@ -53,7 +52,7 @@ class BasePipeline:
 
     def _assert(self, name, value):
         if value is None:
-            raise Exception(f'Undefined {name}')
+            raise Exception(f'Undefined {name} for {short_cls(self)}')
         else:
             return value
 
@@ -64,10 +63,6 @@ class BasePipeline:
 
 class ProcessPipeline(BasePipeline):
     '''
-    Can be either called with no arguments except --like and --force, in which case all outstanding data
-    are processed, or with --worker id (which identifies the pipeline) and arguments (each of which identifies
-    a dataset to process).  In the latter case, --force and --like are ignored.
-
     When run via ProcessRunner, an instance is created and either:
     * run() is called, in which case all work (worker or not) is done locally.
       in this case, worker should not call startup() and shutdown(), but a "full run" should.
@@ -108,7 +103,7 @@ class ProcessPipeline(BasePipeline):
         '''
         A missing value identities what is to be processed by a worker.  It is typically a file path or
         the start time (local) of an activity.  It is always a string.  It should be quoted if it contains spaces
-        or otherwise needs special hanlding by the shell.
+        or otherwise needs special handling by the shell.
         '''
         with self._config.db.session_context(expire_on_commit=False) as s:
             missing = self._missing(s) or []  # allow None
@@ -124,7 +119,7 @@ class ProcessPipeline(BasePipeline):
         if self.worker:
             missing = self.__args
         else:
-            missing = [missed.strip('"') for missed in self.missing()]  # will call delete if forced
+            missing = [missed.strip('"') for missed in self.missing()]
         for missed in missing:
             self._run_one(missed)
         self.shutdown()

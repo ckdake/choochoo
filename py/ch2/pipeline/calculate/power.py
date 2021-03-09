@@ -6,7 +6,7 @@ from logging import getLogger
 import numpy as np
 import pandas as pd
 
-from .utils import ActivityGroupCalculatorMixin, DataFrameCalculatorMixin, ProcessCalculator
+from .utils import ActivityGroupProcessCalculator, DataFrameCalculatorMixin, ProcessCalculator
 from ..pipeline import LoaderMixin
 from ...common.log import log_current_exception
 from ...data import present, linear_resample_time, Statistics
@@ -33,17 +33,19 @@ class PowerModel(reftuple('Power', 'bike_model, rider_weight')):
             return instance
 
 
-class PowerCalculator(LoaderMixin, ActivityGroupCalculatorMixin, DataFrameCalculatorMixin, ProcessCalculator):
+class PowerCalculator(LoaderMixin, DataFrameCalculatorMixin, ActivityGroupProcessCalculator):
 
     def __init__(self, *args, power_model=None, caloric_eff=0.25, activity_group=None, **kargs):
         self.power_model_ref = power_model
         self.caloric_eff = caloric_eff
-        super().__init__(*args, timestamp_constraint=activity_group, activity_group=activity_group, **kargs)
+        super().__init__(*args, activity_group=activity_group, **kargs)
 
     def _startup(self, s):
         super()._startup(s)
         self._provides(s, T.POWER_ESTIMATE, StatisticJournalType.FLOAT, U.W, S.AVG,
                        'The estimated power.')
+        self._provides(s, T.VERTICAL_POWER, StatisticJournalType.FLOAT, U.W, S.AVG,
+                       'The estimated power from height gain alone.')
         self._provides(s, T.HEADING, StatisticJournalType.FLOAT, U.DEG, None,
                        'The current heading.')
         self._provides(s, T.ENERGY_ESTIMATE, StatisticJournalType.FLOAT, U.KJ, S.MAX,
@@ -58,12 +60,13 @@ class PowerCalculator(LoaderMixin, ActivityGroupCalculatorMixin, DataFrameCalcul
         log.debug(f'Power: {self.power_model_ref}: {self.power_model}')
 
     def _read_dataframe(self, s, ajournal):
-        from ..owners import SegmentReader, ElevationCalculator
+        from ..owners import ActivityReader, ElevationCalculator
         try:
             self._set_power(s, ajournal)
             df = Statistics(s, activity_journal=ajournal, with_timespan=True). \
-                by_name(SegmentReader, N.DISTANCE, N.SPEED, N.CADENCE). \
+                by_name(ActivityReader, N.DISTANCE, N.SPEED, N.CADENCE). \
                 by_name(ElevationCalculator, N.ELEVATION).df
+            df[N.DISTANCE] = df[N.DISTANCE] * 1000  # convert to SI base units (m) - we're doing PHYSICS
             ldf = linear_resample_time(df)
             ldf = add_differentials(ldf, max_gap=1.1 * median_dt(df))
             return df, ldf
@@ -82,7 +85,7 @@ class PowerCalculator(LoaderMixin, ActivityGroupCalculatorMixin, DataFrameCalcul
         ldf = add_power_estimate(ldf)
         return df, ldf
 
-    def _copy_results(self, s, ajournal, loader, dfs, fields=(N.POWER_ESTIMATE,)):
+    def _copy_results(self, s, ajournal, loader, dfs, fields=(N.POWER_ESTIMATE, N.VERTICAL_POWER)):
         df, ldf = dfs
         self.__add_total_energy(s, ajournal, loader, ldf)
         df = interpolate_to_index(df, ldf, *fields)

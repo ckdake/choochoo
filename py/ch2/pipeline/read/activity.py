@@ -2,14 +2,12 @@ from logging import getLogger
 from os.path import splitext, basename
 
 from pygeotile.point import Point
-from sqlalchemy import text, select
-from sqlalchemy.orm import aliased
 
 from .utils import AbortImportButMarkScanned, ProcessFitReader
+from ..pipeline import LoaderMixin
 from ...commands.args import DEFAULT
 from ...commands.upload import ACTIVITY
-from ...common.date import to_time, datetime_to_epoch
-from ...common.geo import utm_srid
+from ...common.date import to_time
 from ...diary.model import TYPE, EDIT
 from ...fit.format.records import fix_degrees, merge_duplicates, no_bad_values
 from ...fit.profile.profile import read_fit
@@ -30,7 +28,7 @@ log = getLogger(__name__)
 # /home/andrew/archive/fit/batch/DI_CONNECT/DI-Connect-Fitness/UploadedFiles_0-_Part1/andrew@acooke.org_24715592701_tap-sync-18690-cc1dd93225119215a1ea87c584a974ce.fit
 # /home/andrew/archive/fit/batch/DI_CONNECT/DI-Connect-Fitness/UploadedFiles_0-_Part1/andrew@acooke.org_24718989709_tap-sync-18690-effaaaffdd06b9419991471bd92d53d5.fit
 
-class ActivityReader(ProcessFitReader):
+class ActivityReader(LoaderMixin, ProcessFitReader):
 
     KIT = 'kit'
 
@@ -49,14 +47,14 @@ class ActivityReader(ProcessFitReader):
         for field, title, units, cls in self.record_to_db:
             self._provides(s, title, STATISTIC_JOURNAL_TYPES[cls], units, None,
                            f'The value of field {field} in the FIT record.')
+        self._provides(s, T.ELAPSED_TIME, StatisticJournalType.FLOAT, U.S, None,
+                       'The time since the start of teh activity')
         self._provides(s, T.SPHERICAL_MERCATOR_X, StatisticJournalType.FLOAT, U.M, None,
                        'The Web Mercator EPSG:3857 X coordinate')
         self._provides(s, T.SPHERICAL_MERCATOR_Y, StatisticJournalType.FLOAT, U.M, None,
                        'The Web Mercator EPSG:3857 Y coordinate')
         self._provides(s, T.RAW_ELEVATION, StatisticJournalType.FLOAT, U.M, None,
                        'The elevation from SRTM1 at this location')
-        self._provides(s, T.LON_LAT, StatisticJournalType.POINT, U.DEG, None,
-                       'The WGS84 longitude and latitude')
         self._provides(s, T.KIT, StatisticJournalType.TEXT, None, None,
                        'The kit used in the activity')
         # also coverages - see _read
@@ -218,6 +216,9 @@ class ActivityReader(ProcessFitReader):
             elif record.name == 'record':
                 if record.value.timestamp > last_timestamp:
                     lat, lon, timestamp = None, None, record.value.timestamp
+                    # elapsed time is not customizable because it needs extra processing
+                    loader.add_data(T.ELAPSED_TIME, ajournal,
+                                    (record.value.timestamp - first_timestamp).total_seconds(), timestamp)
                     # customizable loader
                     for field, title, units, type in self.record_to_db:
                         value = record.data.get(field, None)
@@ -235,7 +236,6 @@ class ActivityReader(ProcessFitReader):
                     logged += 1
                     # values derived from lat/lon
                     if lat is not None and lon is not None:
-                        loader.add_data(N.LON_LAT, ajournal, (lon, lat), timestamp)
                         x, y = Point.from_latitude_longitude(lat, lon).meters
                         loader.add_data(N.SPHERICAL_MERCATOR_X, ajournal, x, timestamp)
                         loader.add_data(N.SPHERICAL_MERCATOR_Y, ajournal, y, timestamp)
@@ -268,55 +268,3 @@ class ActivityReader(ProcessFitReader):
             StatisticJournalFloat.add(s, T._cov(title), U.PC, S.join(S.MIN, S.AVG), self.owner_out,
                                       self.__ajournal, percent, self.__ajournal.start,
                                       description=f'Coverage (% of FIT records with data) for {title}.')
-        self.__create_postgis(s)
-
-    def __create_postgis(self, s):
-        ajournal = ActivityJournal.__table__
-        if self.__create_route_t(s, ajournal):
-            self.__create_centre(s, ajournal)
-            self.__create_utm_srid(s, ajournal)
-
-    def __create_utm_srid(self, s, ajournal):
-        query = select([text(f'ST_X({ajournal.c.centre}::geometry)'), text(f'ST_Y({ajournal.c.centre}::geometry)')]). \
-            where(ajournal.c.id == self.__ajournal.id)
-        log.debug(query)
-        row = s.execute(query).fetchone()
-        lon, lat = row[0], row[1]
-        srid = utm_srid(lat, lon)
-        update = ajournal.update().values(utm_srid=srid).where(ajournal.c.id == self.__ajournal.id)
-        log.debug(update)
-        s.execute(update)
-
-    def __create_centre(self, s, ajournal):
-        centre = f'ST_Centroid({ajournal.c.route_t})'
-        update = ajournal.update().values(centre=text(centre)).where(ajournal.c.id == self.__ajournal.id)
-        log.debug(update)
-        s.execute(update)
-
-    def __create_route_t(self, s, ajournal):
-        log.debug('Setting route_t')
-        lon_lat_epoch = list(self.__lon_lat_epoch(s))
-        if lon_lat_epoch:
-            points = [f'ST_MakePointM({lon}, {lat}, {epoch})' for lon, lat, epoch in lon_lat_epoch]
-            line = f'ST_MakeLine(ARRAY[{", ".join(points)}])'
-        else:
-            log.warning('Empty route?!')
-            line = "'LINESTRINGM EMPTY'::geography"
-        update = ajournal.update().values(route_t=text(line)).where(ajournal.c.id == self.__ajournal.id)
-        log.debug(update)
-        s.execute(update)
-        return bool(lon_lat_epoch)
-
-    def __lon_lat_epoch(self, s):
-        lon, lat = aliased(StatisticJournalFloat, name='lon'), aliased(StatisticJournalFloat, name='lat')
-        nlon, nlat = aliased(StatisticName, name='nlon'), aliased(StatisticName, name='nlat')
-        for row in s.query(lon.value, lat.value, lon.time). \
-                filter(lon.statistic_name_id == nlon.id,
-                       nlon.name == N.LONGITUDE,
-                       lat.statistic_name_id == nlat.id,
-                       nlat.name == N.LATITUDE,
-                       lon.source_id == self.__ajournal.id,
-                       lat.source_id == self.__ajournal.id,
-                       lon.time == lat.time). \
-                order_by(lat.time).all():
-            yield row[0], row[1], datetime_to_epoch(row[2])

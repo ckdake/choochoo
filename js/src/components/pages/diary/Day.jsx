@@ -9,16 +9,18 @@ import {
     JupyterActivity,
     NearbyMenu,
     ScoreField,
+    SectorField,
     ShrimpField,
     TextField,
     ValueField
 } from "./elements";
 import {makeStyles} from "@material-ui/core/styles";
-import {Thumbnail, Layout, BusyWarning} from "../../elements";
+import {BusyWarning, Image, Layout, LinkIcon} from "../../elements";
 import {ColumnCard, ColumnList, LinkButton, Loading, Text} from "../../../common/elements";
-import {handleJson} from "../../functions";
-import {parse} from "date-fns";
-import {FMT_DAY} from "../../../constants";
+import {csrfFetch, handleJson} from "../../functions";
+import ActivityMap from "../../elements/ActivityMap";
+import log from "loglevel";
+import {Add} from "@material-ui/icons";
 
 
 const useStyles = makeStyles(theme => ({
@@ -57,11 +59,16 @@ function childrenFromRest(head, rest, writer, level, history) {
                 children.push(<Header writer={writer} json={row} level={level} history={history} key={i}/>);
             }
         } else {
-            if (head.tag === 'activity' && i === 0 && row.label === 'Name' && row.type === 'edit') {
-                children.push(<EditField writer={writer} json={row} xs={10} key={i}/>);
-                children.push(<Grid item xs={2} key={i+0.5}>
-                    <Thumbnail activity_id={head.db} className={classes.img}/>
-                </Grid>);
+            if (head.tag === 'activity') {
+                if (row.label === 'Name') {
+                    children.push(<EditField writer={writer} json={row} xs={10} key={i}/>);
+                } else if (row.tag === 'thumbnail') {
+                    children.push(<Grid item xs={2} key={i+0.5}>
+                        <Image url={row.value} className={classes.img}/>
+                    </Grid>);
+                } else {
+                     children.push(<Field writer={writer} json={row} key={i}/>);
+                }
             } else {
                 children.push(<Field writer={writer} json={row} key={i}/>);
             }
@@ -95,7 +102,9 @@ function Header(props) {
         childrenFromRest(head, rest, writer, level + 1, history);
 
     if (head.tag === 'climb') {
-        return (<ClimbField json={json}/>);
+        return (<ClimbField json={json} history={history}/>);
+    } else if (head.tag === 'sector') {
+        return (<SectorField json={json} history={history}/>);
     } else if (head.tag === 'nearby-links') {
         return (<NearbyMenu json={json} history={history}/>);
     } else {
@@ -136,6 +145,8 @@ function Field(props) {
                 <Text>Unsupported link: {JSON.stringify(json)}</Text>
             </Grid>);
         }
+    } else if (json.type === 'map') {
+        return <ActivityMap json={json}/>
     } else {
         return (<Grid item xs={4}>
             <Text>Unsupported type: {JSON.stringify(json)}</Text>
@@ -164,10 +175,22 @@ function TopLevelPaper(props) {
         // we drop the title for these
         if (['activity', 'achievements', 'nearbys'].includes(head.tag)) {
             return (<ColumnCard>{children}</ColumnCard>);
+        } else if (head.tag === 'sectors') {
+            return <SectorCard activity_id={head.db}>{children}</SectorCard>;
         } else {
             return (<ColumnCard header={head.value}>{children}</ColumnCard>);
         }
     }
+}
+
+
+function SectorCard(props) {
+    const {activity_id, children} = props;
+    return (<ColumnCard>
+        <Grid item xs={11}><Typography variant='h2'>Sectors</Typography>
+        </Grid><Grid item xs={1}><LinkIcon url={`/sector/new/${activity_id}`} icon={<Add/>}/></Grid>
+        {children}
+    </ColumnCard>);
 }
 
 
@@ -197,7 +220,7 @@ export default function Day(props) {
 
     useEffect(() => {
         setJson(null);
-        fetch('/api/diary/' + date)
+        csrfFetch('/api/diary/' + date)
             .then(handleJson(history, setJson, setError));
     }, [date]);
 

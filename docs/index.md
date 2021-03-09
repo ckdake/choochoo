@@ -3,7 +3,7 @@
 
 * [Danger Ahead](#danger-ahead)
 * [OS-Specific Instructions](#os-specific-instructions)
-  * [Github Codespaces)(#github-codespaces)]
+  * [Github Codespaces](#github-codespaces)
   * [MacOS](#macos)
   * [Ubuntu](#ubuntu)
   * [Other Linux](#other-linux)
@@ -18,8 +18,8 @@
 ## Danger Ahead
 
 See the [explanation](https://github.com/andrewcooke/choochoo) on the front
-page - currently this project is not easy to use and fixing that is not a
-high priority.
+page - currently this project is not easy to use and fixing that is not a high
+priority (well, more exactly, it is not a short-term priority).
 
 If you want to continue anyway, the notes below point you in the right
 direction. Good luck!
@@ -28,20 +28,22 @@ direction. Good luck!
 
 ### Github Codespaces
 
-If you have access to Github Codespaces, This is the quickest way to get up and 
-running with a development environment. Clone the Choochoo repo to your account,
-select the branch you want to use, and run the "Code -> Open with Codespaces" flow.
-Once in there, open up a terminal and move on to the Ubuntu instructions. 
+*Warning - Experimental*
 
-All of the dependencies are already there and docker is running so you should skip
-all of the apt-get commands, but it's likely that that you'll need to update
-docker-compose. You may have luck with running:
+If you have access to Github Codespaces, This is the quickest way to get up
+and running with a development environment. Clone the Choochoo repo to your
+account, select the branch you want to use, and run the "Code -> Open with
+Codespaces" flow.  Once in there, open up a terminal and move on to the Ubuntu
+instructions.
+
+All of the dependencies are already there and docker is running so you should
+skip all of the apt-get commands, but it's likely that that you'll need to
+update docker-compose. You may have luck with running:
 
 https://gist.github.com/tylerszabo/b5b3f9874bb9cce56d23e1f814433b86
 
-Once you're up and running, open the "docker" panel, right click on the running
-choochoo container, and click "Open in browser". 
-
+Once you're up and running, open the "docker" panel, right click on the
+running choochoo container, and click "Open in browser".
 
 ### MacOS
 
@@ -53,10 +55,12 @@ memory (4G) and disk (25G) to run.
 `multipass exec choochoo -- apt-get install -y gcc`
 `multipass shell choochoo`
 
-Now that you are in your VM, on to the Ubuntu instructions to finish installation.
+Now that you are in your VM, on to the Ubuntu instructions to finish
+installation.
 
-To access choochoo once it is running, you will need to set up port forwarding using
-something like this from your Mac, where 192.168.64.3 is the ip of your vm:
+To access choochoo once it is running, you will need to set up port forwarding
+using something like this from your Mac, where 192.168.64.3 is the ip of your
+vm:
 
 `ssh -L 8000:127.0.0.1:8000 ubuntu@192.168.64.3`
 
@@ -117,16 +121,22 @@ The system runs within docker.  It requires three images and three virtual
 volumes.
 
 Clone the repo (the master branch is more likely to work, but the dev branch
-has the latest code).  In the dkr directory are some scripts:
+has the latest code).  In the dkr directory are various scripts (in general a
+script will display help if given the `-h` argument).
 
-* make-choochoo-image.sh - use this to build the main image (the other images
-  run postgres and jupyter and are downloaded automatically).
+Once (only) you need to create a disk (virtual volume) where the permanent
+data (FIT files) are stored:
 
-* run-ch2-jp-pg-persist.sh - use this to start everything.  Use `-h` to see
-  options.  Use `--reset` to build disks for the first use.
+    FORCE_NEW_DISK=1 dkr/make-choochoo-data-volume.sh
 
-The `run-ch2-jp-pg-persist.sh` script will start the web server on
-http://localhost:8000
+Do not repeat this or you will lose all previous uploads.
+
+Then use `run-ch2-jp-pg-persist.sh` to start everything.  Use `--reset` to
+build disks (virtual volumes) for the first use.
+
+    dkr/run-ch2-jp-pg-persist.sh --reset
+
+It will start the web server on http://localhost:8000
 
 ## Initial Configuration
 
@@ -152,8 +162,3 @@ Once the system is configured you can upload activity data (FIT files)
 via the `Upload` page.  If you are just starting, ignore `Kit` for the
 moment, select a file, and click `UPLOAD`.
 
-## More Information
-
-[Docker Cookbook](docker).
-
-[Technical Documentation](technical).

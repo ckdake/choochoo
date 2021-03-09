@@ -1,14 +1,16 @@
-
-import datetime as dt
 from collections import namedtuple
+from functools import cmp_to_key
 from itertools import groupby
 from logging import getLogger
 
+from sqlalchemy import or_
+
 from .frame import linear_resample, present
 from ..common.math import is_nan
-from ..lib.data import nearest_index, get_index_loc, safe_yield, safe_none
+from ..lib.data import nearest_index, get_index_loc, safe_yield
 from ..names import Names as N
-from ..sql import StatisticName, StatisticJournal, Source
+from ..sql import StatisticName, StatisticJournal, Source, ActivityJournal
+from ..sql.tables.sector import SectorJournal
 
 log = getLogger(__name__)
 
@@ -120,7 +122,7 @@ def biggest_climb(df, params=Climb(), grid=10):
     # returns (score, dlo, dhi))
     # use distances (indices) rather than ilocs because we're subdividing the data
     if len(df) > 100 * grid:
-        score, lo, hi = search(df.iloc[::grid].copy())
+        score, lo, hi = search(df.iloc[::grid].copy(), grid=True)
         if score:
             # need to pass through iloc to extend range
             ilo, ihi = get_index_loc(df, lo), get_index_loc(df, hi)
@@ -131,7 +133,7 @@ def biggest_climb(df, params=Climb(), grid=10):
         return search(df, params=params)
 
 
-def search(df, params=Climb()):
+def search(df, params=Climb(), grid=False):
     # returns (score, dlo, dhi)
     # use distance (indices) rather than ilocs because we're subdividing the data
     max_score, max_indices, d = 0, (None, None), df.index[1] - df.index[0]
@@ -147,42 +149,58 @@ def search(df, params=Climb()):
                 max_score = score
                 hi = df.loc[df[SCORE] == max_score].index[0]  # arbitrarily pick one if tied (error here w item())
                 lo = df.index[get_index_loc(df, hi) - offset]
+                if not grid:
+                    # step inwards one location from each end
+                    # (so that we have some 'extra' to aid with intersections)
+                    lo = df.index[get_index_loc(df, hi) - (offset-1)]
+                    hi = df.index[get_index_loc(df, hi) - 1]
                 max_indices = (lo, hi)
     return max_score, max_indices[0], max_indices[1]
 
 
 def climbs_for_activity(s, ajournal):
 
-    from ..pipeline.owners import ActivityCalculator
+    from ..pipeline.calculate.sector import SectorCalculator
+    from ..pipeline.calculate import ActivityCalculator
 
-    total = s.query(StatisticJournal).join(StatisticName, Source). \
+    total = s.query(StatisticJournal). \
+        join(StatisticName, Source). \
         filter(StatisticName.name == N.TOTAL_CLIMB,
                StatisticJournal.time == ajournal.start,
                StatisticName.owner == ActivityCalculator,
                Source.activity_group == ajournal.activity_group).order_by(StatisticJournal.time).one_or_none()
-    statistics = s.query(StatisticJournal).join(StatisticName, Source). \
-        filter(StatisticName.name.like(N.CLIMB_ANY),
+    query = s.query(StatisticJournal). \
+        join(StatisticName, Source). \
+        join(SectorJournal, SectorJournal.id == Source.id). \
+        filter(or_(StatisticName.name.like(N.CLIMB_ANY),
+                   StatisticName.name == N.VERTICAL_POWER),
                StatisticJournal.time >= ajournal.start,
                StatisticJournal.time <= ajournal.finish,
-               StatisticName.owner == ActivityCalculator,
-               Source.activity_group == ajournal.activity_group).order_by(StatisticJournal.time).all()
-    return total, sorted((dict((statistic.statistic_name.name, statistic) for statistic in climb_statistics)
-                          for _, climb_statistics in groupby(statistics, key=lambda statistic: statistic.time)),
-                         key=lambda climb: climb[N.CLIMB_ELEVATION].value, reverse=True)
+               StatisticName.owner == SectorCalculator,
+               Source.activity_group == ajournal.activity_group).order_by(StatisticJournal.time)
+    sjournals = query.all()
 
+    def make_climb(sjournals):
+        sjournals = list(sjournals)
+        climb = {sjournal.statistic_name.name: sjournal for sjournal in sjournals}
+        climb['start-distance'] = sjournals[0].source.start_distance
+        climb['sector-journal-id'] = sjournals[0].source.id
+        climb['sector-id'] = sjournals[0].source.sector_id
+        return climb
 
-@safe_none
-def add_climb_stats(df, climbs):
-    for climb in climbs:
-        finish = climb[N.TIME]
-        start = finish - dt.timedelta(seconds=climb[N.CLIMB_TIME])
-        if N.POWER_ESTIMATE in df.columns:
-            # mean() returns a series!
-            power = df.loc[start:finish, [N.POWER_ESTIMATE]].mean()[0]
-            if not is_nan(power):
-                climb[N.CLIMB_POWER] = power
-            else:
-                log.warning(f'Invalid {N.POWER_ESTIMATE} in climb data')
+    def cmp_climb(a, b):
+        # if start distances are similar, order by elevation
+        if abs(a['start-distance'] - b['start-distance']) / (a['start-distance'] + b['start-distance']) > 0.03:
+            return a['start-distance'] - b['start-distance']
         else:
-            log.warning(f'Missing {N.POWER_ESTIMATE} in climb data')
+            return a[N.CLIMB_ELEVATION].value - b[N.CLIMB_ELEVATION].value
 
+    return total, sorted((make_climb(grouped)
+                          for _, grouped in groupby(sjournals, key=lambda sjournal: sjournal.time)),
+                         key=cmp_to_key(cmp_climb))
+
+
+def climb_sources(s, activity_journal, activity_group=None):
+    if not isinstance(activity_journal, Source):
+        activity_journal = ActivityJournal.at(s, activity_journal, activity_group=activity_group)
+    return s.query(SectorJournal).filter(SectorJournal.activity_journal_id == activity_journal.id).all()

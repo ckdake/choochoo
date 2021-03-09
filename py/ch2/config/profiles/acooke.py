@@ -1,16 +1,23 @@
 from .garmin import Garmin
-from ..database import add_diary_topic, add_child_diary_topic, add_diary_topic_field
-from ..power import add_simple_power_estimate, add_kit_power_estimate, add_kit_power_model
+from ..climb import CLIMB_CNAME
+from ..database import add_diary_topic, add_child_diary_topic, add_diary_topic_field, add_process, add_pipeline
+from ..power import add_simple_power_estimate, add_kit_power_estimate, add_kit_power_model, POWER_MODEL_CNAME
 from ..profile import WALK, SWIM, RUN, BIKE
 from ...commands.args import DEFAULT
 from ...common.names import TIME_ZERO
 from ...diary.model import TYPE, EDIT
 from ...lib import to_time, time_to_local_date
 from ...names import Sports, simple_name, N
+from ...pipeline.calculate import SectorCalculator, ElevationCalculator
+from ...pipeline.calculate.climb import FindClimbCalculator
+from ...pipeline.calculate.cluster import ClusterCalculator
 from ...pipeline.calculate.power import PowerCalculator
-from ...sql import StatisticJournalType, StatisticName, DiaryTopic, DiaryTopicJournal
-from ...sql.tables.sector import SectorGroup
+from ...pipeline.calculate.sector import NewSectorCalculator
+from ...pipeline.read.activity import ActivityReader
+from ...sql import StatisticJournalType, StatisticName, DiaryTopic, DiaryTopicJournal, PipelineType
+from ...sql.tables.sector import SectorGroup, DEFAULT_GROUP_RADIUS_KM
 from ...sql.tables.statistic import STATISTIC_JOURNAL_CLASSES
+from ...sql.types import short_cls
 from ...sql.utils import add
 
 
@@ -63,7 +70,8 @@ class ACooke(Garmin):
         self._load_activity_group(s, MTB, 'MTB cycling activities')
 
     def _load_sector_groups(self, s):
-        SectorGroup.add(s, -33.4, -70.7, 1000, 'Santiago')
+        # note lon, lat for centre
+        SectorGroup.add(s, (-70.7, -33.4), DEFAULT_GROUP_RADIUS_KM, 'Santiago, Chile')
 
     def _sport_to_activity(self):
 
@@ -80,6 +88,22 @@ class ACooke(Garmin):
                 Sports.SPORT_RUNNING: simple_name(RUN),
                 Sports.SPORT_SWIMMING: simple_name(SWIM),
                 Sports.SPORT_WALKING: simple_name(WALK)}
+
+    def _sector_statistics(self, s, power_statistics=None):
+        power_statistics = power_statistics or []
+        add_process(s, ClusterCalculator, blocked_by=[ElevationCalculator],
+                    owner_in=short_cls(ActivityReader))
+        for activity_group in (ROAD, MTB):
+            add_process(s, FindClimbCalculator, blocked_by=[ElevationCalculator],
+                        owner_in=short_cls(ActivityReader), climb=CLIMB_CNAME,
+                        activity_group=activity_group)
+            add_process(s, SectorCalculator, blocked_by=[ClusterCalculator, FindClimbCalculator],
+                        power_model=POWER_MODEL_CNAME, activity_group=activity_group)
+        return power_statistics + [SectorCalculator]
+
+    def _load_sector_pipeline(self, s):
+        for activity_group in (ROAD, MTB):
+            add_pipeline(s, NewSectorCalculator, PipelineType.SECTOR, activity_group=activity_group)
 
     def _load_power_statistics(self, s, simple=False):
         # add power estimates for the two bikes

@@ -79,6 +79,7 @@ class Titles(TitlesBase):
     ALL = 'All'
     ANY_ALL = '% All'
     ALTITUDE = 'Altitude'
+    AZIMUTH = 'Azimuth'
     ASPECT_RATIO = 'Aspect Ratio'
     BOOKMARK = 'Bookmark'
     CADENCE = 'Cadence'
@@ -105,8 +106,10 @@ class Titles(TitlesBase):
     DETRENDED_HEART_RATE = 'Detrended Heart Rate'
     DIRECTION = 'Direction'
     DISTANCE = 'Distance'
+    DISTANCE_TIME = 'Distance & Time'
     EARNED_D = 'Earned %d'
     EARNED_D_ANY= 'Earned %'
+    ELAPSED_TIME = 'Elapsed Time'
     ELEVATION = 'Elevation'
     ENERGY = 'Energy'
     ENERGY_ESTIMATE = 'Energy Estimate'
@@ -135,7 +138,6 @@ class Titles(TitlesBase):
     LIFETIME = 'Lifetime'
     LOCAL_TIME = 'Date'
     LONGITUDE = 'Longitude'
-    LON_LAT = 'Lon / Lat'
     LOSS = 'Loss'
     MAX_MEAN_PE_M = 'Max Mean PE %dm'
     MAX_MEAN_PE_M_ANY = 'Max Mean PE %'
@@ -158,9 +160,9 @@ class Titles(TitlesBase):
     RESPONSES = 'Responses'
     RECOVERY_D = 'Recovery %d'
     RECOVERY_D_ANY = 'Recovery %'
-    SEGMENT_TIME = 'Segment Time'
-    SEGMENT_DISTANCE = 'Segment Distance'
-    SEGMENT_HEART_RATE = 'Segment Heart Rate'
+    SECTOR_ANY = 'Sector %'
+    SECTOR_TIME = 'Sector Time'
+    SECTOR_DISTANCE = 'Sector Distance'
     SOURCE = 'Source'
     SPEED = 'Speed'
     SPHERICAL_MERCATOR_X = 'Spherical Mercator X'
@@ -174,6 +176,7 @@ class Titles(TitlesBase):
     TIME_IN_Z_ANY = 'Time in Z%'
     TIMESPAN_ID = 'Timespan ID'
     TOTAL_CLIMB = 'Total Climb'
+    VERTICAL_POWER = 'Vertical Power'
 
     LO_REST_HR = TitlesBase._lo(REST_HR)
     HI_REST_HR = TitlesBase._hi(REST_HR)
@@ -201,12 +204,14 @@ class Titles(TitlesBase):
     SPEED_KMH = TitlesBase._slash(SPEED, Units.KMH)
     SPEED_MS = TitlesBase._slash(SPEED, Units.MS)
     POWER_ESTIMATE_W = TitlesBase._slash(POWER_ESTIMATE, Units.W)
+    VERTICAL_POWER_W = TitlesBase._slash(VERTICAL_POWER, Units.W)
 
     MED_SPEED_KMH = TitlesBase._med(SPEED_KMH)
     MED_HEART_RATE_BPM = TitlesBase._med(HEART_RATE_BPM)
     MED_HR_IMPULSE_10 = TitlesBase._med(HR_IMPULSE_10)
     MED_CADENCE_RPM = TitlesBase._med(CADENCE_RPM)
     MED_POWER_ESTIMATE_W = TitlesBase._med(POWER_ESTIMATE_W)
+    MED_VERTICAL_POWER_W = TitlesBase._med(VERTICAL_POWER_W)
 
     POWER_HR = 'Power / HR'
     POWER_HR_LAG = 'Power / HR Lag'

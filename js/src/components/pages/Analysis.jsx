@@ -11,7 +11,7 @@ import {
     SimilarActivities,
     SomeActivities
 } from "./analysis";
-import {handleJson} from "../functions";
+import {csrfFetch, handleJson} from "../functions";
 import {Layout} from "../elements";
 
 
@@ -50,9 +50,9 @@ export default function Analysis(props) {
 
     useEffect(() => {
         setParams(null);
-        fetch('/api/analysis/parameters')
+        csrfFetch('/api/analysis/parameters')
             .then(handleJson(history, setParams, setError));
-    }, [reads]);
+    }, [1]);
 
     return (
         <Layout title='Analysis' content={<Columns params={params}/>} errorState={errorState}/>

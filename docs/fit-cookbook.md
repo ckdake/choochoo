@@ -31,8 +31,8 @@ default configuration (`ch2 default-config`) is sufficient.
 To check for errors in `myfile.fit`:
 
     > ch2 fix-fit myfile.fit --discard
-        INFO: Logging to /home/andrew/.ch2/0-36/logs/fix-fit.log
-     WARNING: Could not connect to database
+    [37m    INFO: [37mLogging to /home/andrew/.ch2/0-38/logs/fix-fit.log[0m
+    [37m WARNING: [36mCould not connect to database[0m
     
      Welcome to Choochoo.
     
@@ -67,8 +67,8 @@ To check that the timestamp never increases by more than 60s between
 records:
 
     > ch2 fix-fit myfile.fit --max-delta-t 60 --discard
-        INFO: Logging to /home/andrew/.ch2/0-36/logs/fix-fit.log
-     WARNING: Could not connect to database
+    [37m    INFO: [37mLogging to /home/andrew/.ch2/0-38/logs/fix-fit.log[0m
+    [37m WARNING: [36mCould not connect to database[0m
     
      Welcome to Choochoo.
     
@@ -93,8 +93,8 @@ file (see below to understand what information is removed).
 The command to drop data is (see notes below):
 
     > ch2 fix-fit myfile.fit --max-delta-t 60 --drop --fix-header --fix-checksum --max-fwd-len 500 -o fixed.fit
-        INFO: Logging to /home/andrew/.ch2/0-36/logs/fix-fit.log
-     WARNING: Could not connect to database
+    [37m    INFO: [37mLogging to /home/andrew/.ch2/0-38/logs/fix-fit.log[0m
+    [37m WARNING: [36mCould not connect to database[0m
     
      Welcome to Choochoo.
     
@@ -122,8 +122,8 @@ In the recipe above data were dropped after the first 4975 bytes.  We
 can see what records that affected as follows:
 
     > ch2 fit records --after-bytes 4975 myfile.fit
-        INFO: Logging to /home/andrew/.ch2/0-36/logs/fit.log
-     WARNING: Could not connect to database
+    [37m    INFO: [37mLogging to /home/andrew/.ch2/0-38/logs/fit.log[0m
+    [37m WARNING: [36mCould not connect to database[0m
     
      Welcome to Choochoo.
     
@@ -148,8 +148,8 @@ those are not consecutive there must be some internal messages also
 present.  We can display those too:
 
     > ch2 fit records --after-bytes 4975 --internal myfile.fit
-        INFO: Logging to /home/andrew/.ch2/0-36/logs/fit.log
-     WARNING: Could not connect to database
+    [37m    INFO: [37mLogging to /home/andrew/.ch2/0-38/logs/fit.log[0m
+    [37m WARNING: [36mCould not connect to database[0m
     
      Welcome to Choochoo.
     
@@ -165,8 +165,8 @@ exciting.
 We can also see the same data in binary form.  For example:
 
     > ch2 fit tokens --after-bytes 4975 myfile.fit
-        INFO: Logging to /home/andrew/.ch2/0-36/logs/fit.log
-     WARNING: Could not connect to database
+    [37m    INFO: [37mLogging to /home/andrew/.ch2/0-38/logs/fit.log[0m
+    [37m WARNING: [36mCould not connect to database[0m
     
      Welcome to Choochoo.
     
@@ -188,8 +188,8 @@ First, we note from the `tokens` dump that the data extend from offset
 follows:
 
     > ch2 fix-fit myfile.fit --slices :05069,05317: --fix-header --fix-checksum -o sliced.fit
-        INFO: Logging to /home/andrew/.ch2/0-36/logs/fix-fit.log
-     WARNING: Could not connect to database
+    [37m    INFO: [37mLogging to /home/andrew/.ch2/0-38/logs/fix-fit.log[0m
+    [37m WARNING: [36mCould not connect to database[0m
     
      Welcome to Choochoo.
     
@@ -205,8 +205,8 @@ file (to the best of its ability).
 ## Change the Times in a FIT File
 
     > ch2 fix-fit myfile.fit --start '2018-01-01 12:00:00' --fix-checksum -o fixed.fit
-        INFO: Logging to /home/andrew/.ch2/0-36/logs/fix-fit.log
-     WARNING: Could not connect to database
+    [37m    INFO: [37mLogging to /home/andrew/.ch2/0-38/logs/fix-fit.log[0m
+    [37m WARNING: [36mCould not connect to database[0m
     
      Welcome to Choochoo.
     

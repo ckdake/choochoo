@@ -1,28 +1,47 @@
 import datetime as dt
+from json import loads
 from logging import getLogger
 
 import pandas as pd
 from sqlalchemy import text, func
-from sqlalchemy.exc import IntegrityError
 
-from ch2.common.date import local_time_to_time, to_time
-from ch2.common.log import log_current_exception
-from ch2.data import Statistics
-from ch2.data.climb import find_climbs
-from ch2.names import N
-from ch2.pipeline.calculate.elevation import expand_distance_time, ElevationCalculator
-from ch2.pipeline.calculate.utils import ActivityJournalCalculatorMixin, ProcessCalculator
-from ch2.pipeline.read.segment import SegmentReader
-from ch2.sql import Timestamp
-from ch2.sql.database import connect_config
-from ch2.sql.tables.sector import SectorGroup, Sector, Climb
-from ch2.sql.types import short_cls
-from ch2.sql.utils import add
+from .elevation import expand_distance_time, elapsed_time_to_time
+from .utils import ActivityGroupProcessCalculator
+from ...common.date import local_time_to_time
+from ...common.log import log_current_exception
+from ...data.sector import add_start_finish
+from ...names import N
+from ...sql import Timestamp, Constant, Sector, SectorGroup, SectorClimb
+from ...sql.types import linestringxy
+from ...sql.utils import add
 
 log = getLogger(__name__)
 
+DISTINCT_CLIMB = 0.5
 
-class FindClimbCalculator(ActivityJournalCalculatorMixin, ProcessCalculator):
+
+class FindClimbCalculator(ActivityGroupProcessCalculator):
+
+    def __init__(self, *args, climb=None, **kargs):
+        super().__init__(*args, **kargs)
+        self.__climb_ref = climb
+
+    def _startup(self, s):
+        from ...data.climb import Climb
+        super()._startup(s)
+        self.__climb = Climb(**loads(Constant.from_name(s, self.__climb_ref).at(s).value))
+
+    def _shutdown(self, s):
+        super()._shutdown(s)
+        if not self.worker:
+            log.info('Checking for extra prunes')
+            n_climbs, n_prunes = 0, 0
+            for climb_id in s.query(SectorClimb.id).all():
+                if self.__prune_climb(s, climb_id):
+                    n_prunes += 1
+                else:
+                    n_climbs += 1
+            log.info(f'Total {n_climbs} climbs ({n_prunes} pruned)')
 
     def _run_one(self, missed):
         start = local_time_to_time(missed)
@@ -31,11 +50,12 @@ class FindClimbCalculator(ActivityJournalCalculatorMixin, ProcessCalculator):
             with Timestamp(owner=self.owner_out, source=ajournal).on_success(s):
                 if ajournal.route_edt:
                     for sector_group in s.query(SectorGroup). \
-                            filter(func.st_distance(SectorGroup.centre, ajournal.centre) < SectorGroup.radius). \
+                            filter(func.st_distance(SectorGroup.centre, ajournal.centre)
+                                   < SectorGroup.radius). \
                             all():
+                        log.info(f'Finding climbs for activity journal {ajournal.id} / sector group {sector_group.id}')
                         try:
                             self.__find_big_climbs(s, sector_group, ajournal)
-                            self.__find_small_climbs(s, sector_group, ajournal)
                         except Exception as e:
                             log.warning(f'Climb detection failed with {e} for activity journal {ajournal.id} '
                                         f'and sector group {sector_group.id}')
@@ -43,82 +63,16 @@ class FindClimbCalculator(ActivityJournalCalculatorMixin, ProcessCalculator):
                             s.rollback()
 
     def __find_big_climbs(self, s, sector_group, ajournal):
-        log.info('Finding climbs from the entire route')
-        df = self.__complete_route(s, sector_group.id, ajournal.id)
-        df = expand_distance_time(df, 'distance_time', ajournal.start)
+        from ...data.climb import find_climbs
+        df = self.__read_complete_route(s, sector_group.id, ajournal.id)
+        df = expand_distance_time(df)
+        df = elapsed_time_to_time(df, ajournal.start)
         df = df.set_index(df[N.TIME]).drop(columns=[N.TIME])
-        for climb in find_climbs(df):
+        for climb in find_climbs(df, params=self.__climb):
             log.info(f'Have a climb (elevation {climb[N.CLIMB_ELEVATION]})')
-            self.__register_climb(s, df, climb, sector_group)
+            self.__register_climb(s, df, climb, sector_group, ajournal.id)
 
-    def __find_small_climbs(self, s, sector_group, ajournal):
-        log.info('Finding climbs from the remaining route')
-        df = self.__non_climb_paths(s, sector_group.id, ajournal.id)
-        df = expand_distance_time(df, 'distance_time', ajournal.start)
-        df = df.set_index(df[N.TIME]).drop(columns=[N.TIME])
-        for path in df['path'].unique():
-            df_path = df.loc[df['path'] == path]
-            for climb in find_climbs(df_path):
-                log.info(f'Have a climb (elevation {climb[N.CLIMB_ELEVATION]})')
-                self.__register_climb(s, df, climb, sector_group)
-
-    def __register_climb(self, s, df, climb, sector_group):
-        df = df.loc[climb[N.TIME] - dt.timedelta(seconds=climb[N.CLIMB_TIME]) : climb[N.TIME]]
-        points = [f'ST_MakePoint({row.x}, {row.y})' for row in df.itertuples()]
-        route = f'ST_MakeLine(ARRAY[{", ".join(points)}])'
-        box = f'Box2D({route})'
-        while True:
-            try:
-                self.__add_climb(s, sector_group, climb, route, box)
-                s.commit()
-                log.info('Added climb')
-                return
-            except IntegrityError:
-                s.rollback()
-                if self.__blocked_by_bigger(s, sector_group, box, climb[N.CLIMB_ELEVATION]):
-                    log.info('Climb was blocked by bigger climb')
-                    return
-                else:
-                    self.__remove_smaller(s, sector_group, box, climb[N.CLIMB_ELEVATION])
-
-    def __blocked_by_bigger(self, s, sector_group, box, elevation):
-        query = s.query(Sector). \
-            join(Climb). \
-            filter(Sector.sector_group == sector_group,
-                   Sector.owner == self,
-                   Climb.elevation >= elevation,
-                   Sector.exclusion.intersects(text(box)))
-        return s.query(query.exists()).scalar()
-
-    def __remove_smaller(self, s, sector_group, box, elevation):
-        query = s.query(Sector.id). \
-            join(Climb). \
-            filter(Sector.sector_group == sector_group,
-                   Sector.owner == self,
-                   Climb.elevation < elevation,
-                   Sector.exclusion.intersects(text(box)))
-        n = query.count()
-        if n:
-            log.info(f'Deleting {n} smaller climbs')
-            s.query(Sector).filter(Sector.id.in_(query)).delete(synchronize_session=False)
-        else:
-            log.warning('Climb was blocked, but no bigger or smaller climbs exist')
-
-    def __add_climb(self, s, sector_group, climb, route, box):
-        if N.CLIMB_CATEGORY in climb:
-            title = f'Climb (cat {climb[N.CLIMB_CATEGORY]})'
-        else:
-            title = f'Climb (uncat)'
-        # text because we're passing in direct SQL functions, not EWKT
-        sector = add(s, Sector(sector_group=sector_group, route=text(route), title=title,
-                     owner=self, exclusion=text(box)))
-        s.commit()
-        category = climb.get(N.CLIMB_CATEGORY, None)
-        add(s, Climb(sector=sector, category=category, elevation=climb[N.CLIMB_ELEVATION],
-                     distance=climb[N.CLIMB_DISTANCE]))
-        return 1
-
-    def __complete_route(self, s, sector_group_id, activity_journal_id):
+    def __read_complete_route(self, s, sector_group_id, activity_journal_id):
         sql = text(f'''
   with points as (select st_dumppoints(st_transform(aj.route_edt::geometry, sg.srid)) as point
                     from activity_journal as aj,
@@ -127,7 +81,7 @@ class FindClimbCalculator(ActivityJournalCalculatorMixin, ProcessCalculator):
                      and sg.id = :sector_group_id
                      and st_distance(sg.centre, aj.centre) < sg.radius)
 select st_x((point).geom) as x, st_y((point).geom) as y, 
-       st_z((point).geom) as {N.ELEVATION}, st_m((point).geom) as distance_time
+       st_z((point).geom) as {N.ELEVATION}, st_m((point).geom) as "{N.DISTANCE_TIME}"
   from points;
         ''')
         log.debug(sql)
@@ -136,65 +90,56 @@ select st_x((point).geom) as x, st_y((point).geom) as y,
                                  'activity_journal_id': activity_journal_id})
         return df
 
+    def __register_climb(self, s, df, climb_id, sector_group, activity_journal_id):
+        # this is not easy
+        # we cannot exclude climbs based on a constraint (it's too complex)
+        # we are loading in parallel, so don't have a clear idea of what other climbs exist at any one point in time
+        # so what we do is load all climbs and then delete conflicts
+        # deletion always respects earlier (smaller ID) climbs, so we get something similar(?) to what we
+        # would get if all loaded in order
+        df = df.loc[climb_id[N.TIME] - dt.timedelta(seconds=climb_id[N.CLIMB_TIME]): climb_id[N.TIME]]
+        route = linestringxy([(row.x, row.y) for row in df.itertuples()], type='geometry')
+        climb_id = self.__add_climb(s, sector_group, climb_id, route, activity_journal_id)
+        add_start_finish(s, climb_id)
+        log.debug(f'Added climb {climb_id}')
+        self.__prune_climb(s, climb_id)
+        s.commit()
 
-    def __non_climb_paths(self, s, sector_group_id, activity_journal_id, buffer=20):
+    def __add_climb(self, s, sector_group, climb, route, activity_journal_id):
+        if N.CLIMB_CATEGORY in climb:
+            title = f'Climb (cat {climb[N.CLIMB_CATEGORY]})'
+        else:
+            title = f'Climb (uncat)'
+        category = climb.get(N.CLIMB_CATEGORY, None)
+        # text because we're passing in direct SQL functions, not EWKT
+        climb = add(s, SectorClimb(sector_group=sector_group, route=text(route), title=title, owner=self,
+                                   distance=climb[N.CLIMB_DISTANCE], category=category,
+                                   elevation=climb[N.CLIMB_ELEVATION]))
+        s.flush()
+        return climb.id
+
+    def __prune_climb(self, s, climb_id):
         sql = text(f'''
-  with climbs as (select climb
-                    from (select st_collect(st_buffer(st_setsrid(s.route, sg.srid), 20, 'endcap=flat')) as climb,
-                                 0 as order
-                            from sector as s,
-                                 sector_group as sg
-                           where sg.id = s.sector_group_id
-                             and sg.id = :sector_group_id
-                             and owner = :owner
-                           union
-                          select st_mlinefromtext('multilinestring empty', sg.srid),
-                                 1 as order
-                            from sector_group as sg
-                           where sg.id = :sector_group_id) as _
-                    order by "order" limit 1),
-       -- this is a singleton and is carried through below so that m can be extracted
-       route as (select st_transform(aj.route_edt::geometry, sg.srid) as route
-                   from activity_journal as aj,
-                        sector_group as sg
-                  where aj.id = :activity_journal_id
-                    and sg.id = :sector_group_id
-                    and st_distance(sg.centre, aj.centre) < sg.radius),
-       lines as (select st_dump(st_multi(st_difference(r.route, c.climb))) as line,
-                        r.route as route
-                   from activity_journal as aj,
-                        climbs as c,
-                        sector_group as sg,
-                        route as r
-                  where aj.id = :activity_journal_id
-                    and sg.id = :sector_group_id),
-       points as (select st_dumppoints((line).geom) as point,
-                         route,
-                         (line).path[1]
-                    from lines),
-       -- extract m
-       og_points as (select st_lineinterpolatepoint(route, 
-                                                    greatest(0, least(1, 
-                                                       st_linelocatepoint(route, (point).geom)))) as point,
-                            path as path
-                       from points)
-select st_x(point) as x, st_y(point) as y, st_z(point) as elevation, st_m(point) as distance_time, path
-  from og_points;
-        ''')
-        log.debug(sql)
-        df = pd.read_sql(sql, s.connection(),
-                         params={'sector_group_id': sector_group_id,
-                                 'owner': short_cls(self),
-                                 'activity_journal_id': activity_journal_id,
-                                 'buffer': buffer})
-        return df
-
-    def __original_route(self, s, ajournal):
-        return Statistics(s, activity_journal=ajournal, with_timespan=True). \
-            by_name(SegmentReader, N.DISTANCE, N.HEART_RATE, N.SPHERICAL_MERCATOR_X, N.SPHERICAL_MERCATOR_Y). \
-            by_name(ElevationCalculator, N.ELEVATION).df
-
-
-if __name__ == '__main__':
-    config = connect_config(['-v5'])
-    FindClimbCalculator(config).run()
+  with candidates as (select st_length(st_setsrid(b.route, sg.srid)) as l1,
+                             st_length(st_difference(st_setsrid(b.route, sg.srid), st_setsrid(s.hull, sg.srid))) as l2,
+                             st_length(st_setsrid(s.route, sg.srid)) as l3,
+                             st_length(st_difference(st_setsrid(s.route, sg.srid), st_setsrid(b.hull, sg.srid))) as l4
+                        from sector as b,
+                             sector as s,
+                             sector_group as sg
+                       where s.id = :climb_id
+                         and b.id < s.id
+                         and sg.id = s.sector_group_id
+                         and sg.id = b.sector_group_id
+                         and st_intersects(st_setsrid(b.route, sg.srid), st_setsrid(s.hull, sg.srid)))
+select count(1)
+  from candidates as c
+ where l2 / l1 < {DISTINCT_CLIMB}
+   and l4 / l3 < {DISTINCT_CLIMB}
+''')
+        if s.connection().execute(sql, climb_id=climb_id).scalar():
+            log.debug(f'Deleting climb {climb_id}')
+            s.query(Sector).filter(Sector.id == climb_id).delete(synchronize_session=False)
+            return True
+        else:
+            return False

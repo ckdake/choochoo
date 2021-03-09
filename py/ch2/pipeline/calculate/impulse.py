@@ -3,7 +3,7 @@ from collections import namedtuple
 from json import loads
 from logging import getLogger
 
-from .utils import ProcessCalculator, ActivityGroupCalculatorMixin, DataFrameCalculatorMixin
+from .utils import ProcessCalculator, ActivityGroupProcessCalculator, DataFrameCalculatorMixin
 from ..pipeline import OwnerInMixin, LoaderMixin
 from ...common.math import is_nan
 from ...data import Statistics
@@ -17,13 +17,13 @@ log = getLogger(__name__)
 HRImpulse = namedtuple('HRImpulse', 'title, gamma, zero, one, max_secs')
 
 
-class ImpulseCalculator(LoaderMixin, OwnerInMixin,
-                        ActivityGroupCalculatorMixin, DataFrameCalculatorMixin, ProcessCalculator):
+class ImpulseCalculator(LoaderMixin, OwnerInMixin, DataFrameCalculatorMixin,
+                        ActivityGroupProcessCalculator):
 
     def __init__(self, *args, prefix=None, impulse_constant=None, activity_group=None, **kargs):
         self.impulse_constant_ref = self._assert('impulse_constant', impulse_constant)
         self.prefix = self._assert('prefix', prefix)
-        super().__init__(*args, timestamp_constraint=activity_group, activity_group=activity_group, **kargs)
+        super().__init__(*args, activity_group=activity_group, **kargs)
 
     def _startup(self, s):
         super()._startup(s)

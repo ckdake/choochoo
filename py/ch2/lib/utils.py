@@ -239,3 +239,17 @@ def clean(token, none=False):
         return None
     else:
         return token.strip().lower()
+
+
+def insert(generator, index, extra):
+    for i, value in enumerate(generator):
+        if i == index:
+            yield extra
+        yield value
+
+
+def str_or_none(value):
+    if value is None:
+        return value
+    else:
+        return str(value)

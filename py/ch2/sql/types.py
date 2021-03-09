@@ -5,8 +5,11 @@ from re import compile, IGNORECASE
 
 import pytz
 from geoalchemy2 import Geography
+from geoalchemy2.shape import from_shape
+from shapely.geometry import Point
 from sqlalchemy import TypeDecorator, Integer, Text, func, DateTime
 
+from .utils import WGS84_SRID
 from ..names import simple_name
 
 log = getLogger(__name__)
@@ -171,34 +174,49 @@ class QualifiedName(TypeDecorator):
     process_bind_param = process_literal_param
 
 
-POINT = compile(r'point\((-?\d*\.?\d*)\s+(-?\d*\.?\d*)\)', IGNORECASE)
+def point(x, y, srid=-1):
+    # return from_shape(Point(x, y), srid=srid)
+    return f'ST_MakePoint({x}, {y})'
 
 
-class Point(TypeDecorator):
-    '''
-    i don't completely understand why this works, or why column_expression is needed.
-    seems like we're fighting geoalchemy2 somehow.
+def linestringxyzm(xyzm, type='geography'):
+    if xyzm:
+        points = [f'ST_MakePoint({x}, {y}, {z}, {m})' for x, y, z, m in xyzm]
+        line = f'ST_MakeLine(ARRAY[{", ".join(points)}])'
+    else:
+        log.warning(f'Empty geo data')
+        line = "'LINESTRINGZM EMPTY'::" + type
+    return line
 
-    also, it seems to break things when used for activity_journal.centre(!)
 
-    also, geoalchemy2 doesn't add an index to the table
-    '''
+def linestringxym(xym, type='geography'):
+    if xym:
+        points = [f'ST_MakePointM({x}, {y}, {m})' for x, y, m in xym]
+        line = f'ST_MakeLine(ARRAY[{", ".join(points)}])'
+    else:
+        log.warning(f'Empty geo data')
+        line = "'LINESTRINGM EMPTY'::" + type
+    return line
 
-    impl = Geography('point', srid=4326)
 
-    def process_literal_param(self, value, dialect):
-        lon, lat = value
-        return f'Point({lon} {lat})'
+def linestringxyz(xyz, type='geography'):
+    if xyz:
+        points = [f'ST_MakePoint({x}, {y}, {z})' for x, y, z in xyz]
+        line = f'ST_MakeLine(ARRAY[{", ".join(points)}])'
+    else:
+        log.warning(f'Empty geo data')
+        line = "'LINESTRINGZ EMPTY'::" + type
+    return line
 
-    process_bind_param = process_literal_param
 
-    def process_result_value(self, value, dialect):
-        # value is a geoalchemy2 WKBElement
-        match = POINT.match(value.data)
-        return float(match.group(1)), float(match.group(2))
-
-    def column_expression(self, col):
-        return func.ST_AsText(col, type_=self)
+def linestringxy(xy, type='geography'):
+    if xy:
+        points = [f'ST_MakePoint({x}, {y})' for x, y in xy]
+        line = f'ST_MakeLine(ARRAY[{", ".join(points)}])'
+    else:
+        log.warning(f'Empty geo data')
+        line = "'LINESTRING EMPTY'::" + type
+    return line
 
 
 NAME = 'name'
@@ -237,7 +255,6 @@ class UTC(TypeDecorator):
     impl = DateTime(timezone=True)
 
     def process_result_value(self, value, dialect):
-        from ..lib.schedule import Schedule
         if value is None:
             return None
         return value.replace(tzinfo=pytz.UTC)

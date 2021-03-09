@@ -15,7 +15,7 @@ log = getLogger(__name__)
 
 
 def run_pipeline(config, type, *args, like=tuple(), worker=None, **extra_kargs):
-    if type is None or type == PipelineType.PROCESS:
+    if type == PipelineType.PROCESS:
         run_process_pipeline(config, type, *args, like=like, worker=worker, **extra_kargs)
     else:
         from .pipeline import run_pipeline
@@ -33,7 +33,7 @@ def run_process_pipeline(config, type, *args, like=tuple(), worker=None, **extra
 
 def instantiate_pipeline(pipeline, config, *args, **kargs):
     kargs = dict(kargs)
-    kargs.update(pipeline.kargs)
+    kargs.update(pipeline.kargs)  # this is where kargs from the config are added in
     log.debug(f'Instantiating {pipeline} with {args}, {kargs}')
     return pipeline.cls(config, *args, **kargs)
 
@@ -56,8 +56,6 @@ class ProcessRunner:
 
     def run(self):
         if self.__worker or self.__n_cpu == 1:
-            if self.__worker and len(self.__pipelines) > 1:
-                raise Exception(f'Worker with multiple classes {self.__worker}')
             for pipeline in self.__pipelines:
                 self.__run_local(pipeline)
         else:
@@ -75,7 +73,8 @@ class ProcessRunner:
         while True:
             try:
                 pipeline, cmd, log_index = queue.pop()
-                popen = self.__config.run_process(pipeline.cls, cmd, log_name(pipeline, log_index))
+                popen = self.__config.run_process(pipeline.cls, cmd, log_name(pipeline, log_index),
+                                                  constraint=pipeline.id)
                 pipelines[popen] = (pipeline, log_index)
                 popens.append(popen)
                 if len(popens) == capacity:
@@ -169,7 +168,7 @@ class DependencyQueue:
         self.__start = now()
         # clear out any junk from previous errors?
         for pipeline in self.__unblocked:
-            self.__config.delete_all_processes(pipeline.cls)
+            self.__config.delete_all_processes(pipeline.cls, constraint=pipeline.id)
 
     def __clean_pipelines(self, pipelines):
         included = set(pipelines)
@@ -200,7 +199,7 @@ class DependencyQueue:
                     unblocked = self.__blocked.pop(i)
                     log.info(f'{pipeline} unblocks {unblocked}')
                     self.__unblocked.append(unblocked)
-                    self.__config.delete_all_processes(unblocked.cls)
+                    # self.__config.delete_all_processes(unblocked.cls)
 
     def pop(self):
         # unblocking takes some time, so do it step by step as we need more

@@ -130,7 +130,7 @@ class Statistics:
         if self.__sources:
             q = q.filter(StatisticJournal.source_id.in_([source.id for source in self.__sources]))
         elif self.__activity_group:
-            # only use of sources not specified separately (since those fix groups anyway)
+            # only use if sources not specified separately (since those fix groups anyway)
             source = aliased(Source)
             q = q.join(source, source.id == StatisticJournal.source_id). \
                 filter(source.activity_group_id == self.__activity_group.id)
@@ -251,7 +251,7 @@ class Data:
         set_times_from_index(self.df)
         return self
 
-    def __coallesce(self, columns, name, delete=False):
+    def __coalesce(self, columns, name, delete=False):
         log.debug(f'Coallescing {columns} for {name}')
         df = self.df[columns].copy()
         df.fillna(method='ffill', axis='columns', inplace=True)
@@ -260,7 +260,7 @@ class Data:
         if delete:
             self.df.drop(columns=columns, inplace=True)
 
-    def coallesce_groups(self, *names, delete=False):
+    def coalesce_groups(self, *names, delete=False):
         '''
         Merge columns named with groups.
         '''
@@ -271,10 +271,10 @@ class Data:
             if name in self.df.columns:
                 raise Exception(f'{name} already exists')
             columns = like(name + ':%', self.df.columns)
-            self.__coallesce(columns, name, delete=delete)
+            self.__coalesce(columns, name, delete=delete)
         return self
 
-    def coallesce_like(self, map, delete=False):
+    def coalesce_like(self, map, delete=False):
         '''
         Merge columns that match.  map is {pattern: result}
         '''
@@ -284,7 +284,7 @@ class Data:
             if name in self.df.columns:
                 raise Exception(f'{name} already exists')
             columns = like(pattern, self.df.columns)
-            self.__coallesce(columns, name, delete=delete)
+            self.__coalesce(columns, name, delete=delete)
         return self
 
 
@@ -320,7 +320,7 @@ def std_health_statistics(s, freq='1h'):
 
     stats = Statistics(s).\
         by_group(ActivityCalculator, N.ACTIVE_TIME, N.ACTIVE_DISTANCE).with_. \
-        coallesce_groups(N.ACTIVE_TIME, N.ACTIVE_DISTANCE). \
+        coalesce_groups(N.ACTIVE_TIME, N.ACTIVE_DISTANCE). \
         rename_with_units(N.ACTIVE_TIME, N.ACTIVE_DISTANCE). \
         copy({N.ACTIVE_TIME_S: N.ACTIVE_TIME_H}, scale=1 / 3600). \
         into(stats, tolerance='30m')
@@ -335,13 +335,13 @@ def std_activity_statistics(s, activity_journal, activity_group=None):
     from ..pipeline.calculate.elevation import ElevationCalculator
     from ..pipeline.calculate.impulse import ImpulseCalculator
     from ..pipeline.calculate.power import PowerCalculator
-    from ..pipeline.read.segment import SegmentReader
+    from ..pipeline.read.activity import ActivityReader
 
     if not isinstance(activity_journal, ActivityJournal):
         activity_journal = ActivityJournal.at(s, activity_journal, activity_group=activity_group)
 
     stats = Statistics(s, activity_journal=activity_journal, with_timespan=True). \
-        by_name(SegmentReader, N.LATITUDE, N.LONGITUDE, N.SPHERICAL_MERCATOR_X, N.SPHERICAL_MERCATOR_Y,
+        by_name(ActivityReader, N.LATITUDE, N.LONGITUDE, N.SPHERICAL_MERCATOR_X, N.SPHERICAL_MERCATOR_Y,
                 N.DISTANCE, N.SPEED, N.CADENCE, N.ALTITUDE, N.HEART_RATE).with_. \
         rename_with_units(N.LATITUDE, N.LONGITUDE, N.DISTANCE, N.SPEED, N.CADENCE, N.ALTITUDE, N.HEART_RATE). \
         copy({N.SPEED_MS: N.MED_SPEED_KMH}, scale=3.6, median=MED_WINDOW). \
@@ -359,38 +359,39 @@ def std_activity_statistics(s, activity_journal, activity_group=None):
         drop_prefix(N.DEFAULT + SPACE).into(stats, tolerance='10s', interpolate=True)
 
     stats = Statistics(s, activity_journal=activity_journal). \
-        by_name(PowerCalculator, N.POWER_ESTIMATE).with_. \
+        by_name(PowerCalculator, N.POWER_ESTIMATE, N.VERTICAL_POWER).with_. \
         rename_with_units(). \
-        copy({N.POWER_ESTIMATE_W: N.MED_POWER_ESTIMATE_W}, median=MED_WINDOW). \
+        copy({N.POWER_ESTIMATE_W: N.MED_POWER_ESTIMATE_W,
+              N.VERTICAL_POWER_W: N.MED_VERTICAL_POWER_W}, median=MED_WINDOW). \
         into(stats, tolerance='1s')
 
     return stats
 
 
-if __name__ == '__main__':
-
-    from ..pipeline.owners import ActivityCalculator, SegmentReader, StepsCalculator
-
-    s = session('-v5')
-
-    with timing('select'):
-        df = std_health_statistics(s)
-        # df = std_activity_statistics(s, '2020-05-15', 'road')
-        # df = Statistics(s).like(N.CLIMB_ANY, owner=ActivityCalculator).from_(activity_journal='2020-05-15').by_group().df
-        # df = Statistics(s).for_(N.ACTIVE_DISTANCE, owner=ActivityCalculator).by_group()
-        # acc = Accumulator(s, sources=[ActivityJournal.at(s, '2020-05-15')])
-        # acc = Accumulator(s, with_timespan=True, sources=[ActivityJournal.at(s, '2020-05-15')])
-        # acc = Accumulator(s, with_source=True)
-        # acc.by_name(ActivityCalculator, N.CLIMB_ANY, like=True)
-        # df = acc.df
-        # df = Statistics(s). \
-        #     by_name(ActivityTopic, N.NAME). \
-        #     by_name(ActivityCalculator, N.ACTIVE_DISTANCE, N.ACTIVE_TIME, N.TOTAL_CLIMB).with_. \
-        #     copy({N.ACTIVE_DISTANCE: N.ACTIVE_DISTANCE_KM}).add_times().df
-        # print(df.describe())
-        # df['Duration'] = df[N.ACTIVE_TIME].map(format_seconds)
-
-    print(df)
-    print(df.describe())
-    print(df.columns)
-    print(df[N.REST_HR_BPM].describe())
+def interpolate(s, source, statistic_name, statistic_owner, time, activity_group=None):
+    if not isinstance(source, Source):
+        source = ActivityJournal.at(s, source, activity_group=activity_group)
+    before = s.query(StatisticJournal). \
+        join(StatisticName). \
+        filter(StatisticName.name == statistic_name,
+               StatisticName.owner == statistic_owner,
+               StatisticJournal.time <= time,
+               StatisticJournal.source == source). \
+        order_by(desc(StatisticJournal.time)).first()
+    after = s.query(StatisticJournal). \
+        join(StatisticName). \
+        filter(StatisticName.name == statistic_name,
+               StatisticName.owner == statistic_owner,
+               StatisticJournal.time >= time,
+               StatisticJournal.source == source). \
+        order_by(asc(StatisticJournal.time)).first()
+    if before is None or after is None:
+        return None
+    if before.time == time:
+        return before.value
+    if after.time == time:
+        return after.value
+    dt = (after.time - before.time).total_seconds()
+    ta = (after.time - time).total_seconds()
+    tb = (time - before.time).total_seconds()
+    return (ta * before.value + tb * after.value) / dt
